@@ -231,6 +231,17 @@ confusion_matrix_region <- olive_df_scaled %>%
 
 
 ```{r}
+table(olive_df_scaled %>% dplyr::select(Region, kmeans_clusters)) %>% 
+  data.frame() %>% 
+  ggplot(aes(x = kmeans_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
+  geom_tile() +
+  geom_text() +
+  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
+  labs(x = "K-means Clusters", y = "", title = "Confusion matrix of k-means clusters and region of olive oil samples") +
+  theme_light()
+```
+
+```{r}
 confusion_matrix_region %>% 
   # ungroup(Region) %>%
   gather(key = "kmeans_clusters", value = "Frequency", -Area, -Region) %>% 
@@ -244,24 +255,27 @@ confusion_matrix_region %>%
 ```
 
 
-```{r}
-table(olive_df_scaled %>% dplyr::select(Region, kmeans_clusters)) %>% 
-  data.frame() %>% 
-  ggplot(aes(x = kmeans_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
-  geom_tile() +
-  geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "K-means Clusters", y = "", title = "Confusion matrix of k-means clusters and region of olive oil samples") +
-  theme_light()
-```
 
 ## Gaussian Mixture Models
 
+Gaussian mixture models (GMM) are a form of model-based clustering that provide soft assignment to each observation by providing a probability of belonging to each cluster.
+
+A benefit of Gaussian mixture models over k-means is that the former automatically identifies the optimal number of clusters. In addition, GMMs allow for more clustering a wider variety of cluster shapes and orientations.
+
+It's important to highlight that GMMs assume multivariate normality of data.
+
+The `mclust` package will be used to apply GMM models to the data. The BIC is used to identify the optimize the covariance parameters and to identify the optimal number of clusters.
+
 ```{r}
+# install.packages("mclust")
+library(mclust)
+
 gmm <- mclust::Mclust(data = olive_df_adjusted[, features], G = 2:10, verbose = FALSE)
 
 summary(gmm)
 ```
+
+The final model has `r gmm$G` clusters and a BIC of `r gmm$bic`.
 
 ```{r}
 olive_df_adjusted$gmm_clusters <- gmm$classification
@@ -272,6 +286,7 @@ colnames(gmm_probability) <- paste0("GMM Cluster ", str_pad(1:gmm$G, width = 2, 
 olive_df_adjusted <- cbind(olive_df_adjusted, gmm_probability)
 ```
 
+The optimal models uses the `r gmm$modelName` covariance parameters (diagonal, varying volume and shape).
 
 ```{r}
 gmm_BIC <- matrix(gmm$BIC, nrow = dim(gmm$BIC)[1], ncol = dim(gmm$BIC)[2]) %>% data.frame() %>% add_column(K = 2:10, .before=1)
@@ -291,6 +306,7 @@ gmm_BIC %>%
     theme_light()
 ```
 
+### Probability and Uncertainty
 
 ```{r fig.align='center', fig.height=5, fig.width=12}
 olive_df_adjusted %>% 
@@ -307,11 +323,163 @@ olive_df_adjusted %>%
     theme_light()
 ```
 
+The plot below shows that most samples with high uncertainty (>0.20) are from the South and are found mostly on cluster 3, 4 and 5.
+
+```{r}
+olive_df_adjusted %>% 
+  dplyr::select(Region, Area, Uncertainty = gmm_uncertainty, Cluster = gmm_clusters) %>% 
+  mutate(ID = row_number()) %>% 
+  filter(Uncertainty > 0.20) %>% 
+  ggplot(aes(x = Uncertainty, reorder(ID, Uncertainty), col = factor(Cluster), shape = Region)) +
+    geom_point(size = 3) +
+    labs(title = "Observations with an uncertainty of membership higher than 0.20", y = "ID", col = "Cluster") +
+    scale_color_brewer(type = "qual", palette = "Set1", direction = -1) +
+    theme_bw() 
+```
+
+
+### Confusion Matrix
+
+```{r}
+confusion_matrix_region <- olive_df_adjusted %>% 
+   dplyr::select(Region, Area, `GMM Clusters` =  gmm_clusters) %>% 
+   dplyr::mutate(idx = 1) %>% 
+   dplyr::group_by(Region, Area, `GMM Clusters`) %>%
+   dplyr::summarise(Frequency = sum(idx)) %>% 
+   spread(key = "GMM Clusters", value = "Frequency", fill = 0) %>% 
+   dplyr::arrange(Region, Area)
+```
+
+```{r}
+table(olive_df_adjusted %>% dplyr::select(Region, gmm_clusters)) %>% 
+  data.frame() %>% 
+  ggplot(aes(x = gmm_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
+  geom_tile() +
+  geom_text() +
+  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
+  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand region of olive oil samples") +
+  theme_light()
+```
+
+```{r}
+confusion_matrix_region %>% 
+  # ungroup(Region) %>%
+  gather(key = "GMM Clusters", value = "Frequency", -Area, -Region) %>% 
+  dplyr::mutate(`GMM Clusters` = factor(`GMM Clusters`)) %>% 
+  ggplot(aes(x = `GMM Clusters`, y = fct_reorder(Area, dplyr::desc(Region)), fill = Frequency, label = Frequency)) + 
+  geom_tile() +
+  geom_text() +
+  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
+  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand area of olive oil samples") +
+  theme_light()
+```
+
+## HDBSCAN
+
+```{r}
+# olive_adjusted %>% 
+#   group_by(area) %>% 
+#   summarise(Count = n()) %>% 
+#   arrange(Count)
+```
 
 
 
+```{r}
+# install.packages("dbscan")
+library(dbscan)
+
+(hdbscan <- dbscan::hdbscan(olive_df_scaled[, features], minPts = 10))
+```
+
+```{r}
+olive_df_adjusted$hdbscan_clusters <- hdbscan$cluster
+olive_df_adjusted$hdbscan_membership_prob <- hdbscan$membership_prob
+olive_df_adjusted$hdbscan_outlier_scores <- hdbscan$outlier_scores
+
+hdbscan %>% plot(show_flat =TRUE)
+```
+
+### Probability and Uncertainty
+
+```{r fig.align='center', fig.height=5, fig.width=12}
+olive_df_adjusted %>% 
+  dplyr::select(Region, Area, Cluster = hdbscan_clusters, Probability = hdbscan_membership_prob) %>% 
+  mutate(ID = row_number(),
+         Cluster = factor(Cluster, labels = c("Outlier", 1:max(hdbscan$cluster)))) %>% 
+  # gather(Cluster, probability, -ID, -Region, -Area) %>% 
+  dplyr::arrange(Region, Area) %>% 
+  ggplot(aes(x = Probability, fill = Cluster)) +
+    geom_histogram() +
+    facet_wrap(~ Cluster, nrow = 2, scales = "free_y") +
+    labs(x = "Probability", y = "Count",
+         title = "Distribution of probabilities for all observations aligning to each cluster") +
+    scale_fill_brewer(type = "qual", palette = "Set1") +
+    theme_light()
+```
+
+The plot below shows that most samples with high uncertainty (>0.20) are from the South and are found mostly on cluster 3, 4 and 5.
+
+```{r}
+olive_df_adjusted %>% 
+  filter(hdbscan_clusters == 0) %>% 
+  pull(hdbscan_outlier_scores) %>% 
+  hist()
+
+```
 
 
+
+```{r}
+olive_df_adjusted %>% 
+  dplyr::select(Region, Area, Outlier_Score = hdbscan_outlier_scores, Cluster = hdbscan_clusters) %>% 
+  mutate(ID = row_number()) %>% 
+  filter(Outlier_Score > 0.50,
+         Cluster == 0) %>% 
+  ggplot(aes(x = Outlier_Score, reorder(ID, Outlier_Score), col = factor(Region), shape = Region)) +
+    geom_point(size = 1.5) +
+    labs(title = "Observations with an outlier score higher than 0.50", y = "", col = "Region") +
+    scale_y_discrete(labels = NULL, breaks = NULL) +
+    scale_color_brewer(type = "qual", palette = "Set1", direction = -1) +
+    theme_bw()
+```
+
+
+### Confusion Matrix
+
+```{r}
+confusion_matrix_region <- olive_df_adjusted %>% 
+   dplyr::select(Region, Area, `HDBSCAN Clusters` =  hdbscan_clusters) %>% 
+   dplyr::mutate(idx = 1) %>% 
+   dplyr::group_by(Region, Area, `HDBSCAN Clusters`) %>%
+   dplyr::summarise(Frequency = sum(idx)) %>% 
+   spread(key = "HDBSCAN Clusters", value = "Frequency", fill = 0) %>% 
+   dplyr::arrange(Region, Area)
+```
+
+```{r}
+table(olive_df_adjusted %>% dplyr::select(Region, hdbscan_clusters)) %>% 
+  data.frame() %>% 
+  ggplot(aes(x = hdbscan_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
+  geom_tile() +
+  geom_text() +
+  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
+  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand region of olive oil samples") +
+  theme_light()
+```
+
+```{r}
+confusion_matrix_region %>% 
+  # ungroup(Region) %>%
+  gather(key = "GMM Clusters", value = "Frequency", -Area, -Region) %>% 
+  dplyr::mutate(`GMM Clusters` = factor(`GMM Clusters`)) %>% 
+  ggplot(aes(x = `GMM Clusters`, y = fct_reorder(Area, dplyr::desc(Region)), fill = Frequency, label = Frequency)) + 
+  geom_tile() +
+  geom_text() +
+  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
+  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand area of olive oil samples") +
+  theme_light()
+```
 
 
 
