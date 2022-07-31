@@ -1,5 +1,6 @@
 ---
-title: "Olive_Oil"
+title: "Clustering of Italian Olive Oils with their Fatty Acid Composition"
+subtitle: "Use of K-Means, Gaussian Mixture Models and HDBSCAN"
 author: "Jean Dos Santos"
 date: "April 2020"
 output:
@@ -18,41 +19,62 @@ output:
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, error = FALSE)
 ```
 
-# Importing Packages
-
-```{r}
-# install.packages("pacman", quiet = TRUE, verbose = FALSE)
-library(pacman, quietly = TRUE, verbose = FALSE)
-
-pacman::p_load(cepp, plyr,caret, tidyverse, tidyselect, janitor, gdata, tools, mclust, install = TRUE, update = FALSE)
-```
-
 This data is from a paper by Forina, Armanino, Lanteri, Tiscornia (1983) Classification of Olive Oils from their Fatty Acid Composition, in Martens and Russwurm (ed) Food Research and Data Anlysis. We thank Prof. Michele Forina, University of Genova, Italy for making this dataset available.
 
 https://rdrr.io/cran/cepp/man/data-olive.html
 
-`region` Three super-classes of Italy: North, South and the island of Sardinia
+- `region` Three super-classes of Italy: North, South and the island of Sardinia  
+- `area` Nine collection areas: three from North, four from South and 2 from Sardinia  
 
-`area` Nine collection areas: three from North, four from South and 2 from Sardinia
 
-palmitic, palmitoleic, stearic, oleic, linoleic, linolenic, arachidic, eicosenoic fatty acids percent x 100
+***
 
-A 572 x 10 numeric array
+# Importing Packages
+
+```{r, message=FALSE}
+library(cepp)
+library(plyr)
+library(caret)
+library(tidyselect)
+library(forcats)
+library(janitor)
+library(gdata)
+library(tools)
+library(mclust)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(purrr)
+library(tibble)
+library(readr)
+library(stringr)
+```
+
+
+***
 
 # Importing Data
 
 ```{r}
-# install.packages("cepp")
-library(cepp)
 data("olive")
 
-write.csv(olive, file = "Olive Oil Data - Forina, Armanino, Lanteri, Tiscornia (1983).csv", na = "", row.names = FALSE)
+write.csv(olive, 
+          file = "data/Olive Oil Data - Forina, Armanino, Lanteri, Tiscornia (1983).csv", 
+          na = "", row.names = FALSE)
 ```
+
+
+***
 
 # Data Pre-processing
 
 ```{r}
-olive_df <- rename.vars(data = olive, from = colnames(olive), to = tools::toTitleCase(colnames(olive)), info = FALSE)
+olive_df <- rename.vars(
+  data = olive, 
+  from = colnames(olive), 
+  to = tools::toTitleCase(colnames(olive)), 
+  info = FALSE)
 
 # Create vector for targets and features
 target <- colnames(olive_df)[1:2]
@@ -65,12 +87,15 @@ olive_df$Region <- plyr::revalue(x = as.character(olive_df$Region),
                                              "3" = "North"))
 
 olive_df$Area <- plyr::revalue(x = as.character(str_trim(olive_df$Area)), 
-                               replace = c("North-Apulia" = "Apulia (North)",
-                                           "South-Apulia" = "Apulia (South)",
-                                           "Inland-Sardinia" = "Sardinia (Inland)",
-                                           "Coast-Sardinia" = "Sardinia (Coast)",
-                                           "East-Liguria" = "Liguria (East)",
-                                           "West-Liguria" = "Liguria (West)"))
+                               replace = c(
+                                 "North-Apulia" = "Apulia (North)",
+                                 "South-Apulia" = "Apulia (South)",
+                                 "Inland-Sardinia" = "Sardinia (Inland)",
+                                 "Coast-Sardinia" = "Sardinia (Coast)",
+                                 "East-Liguria" = "Liguria (East)",
+                                 "West-Liguria" = "Liguria (West)"
+                                 )
+                               )
 
 # Convert features into %
 olive_df[, features] <- olive_df[, features]/100
@@ -79,7 +104,10 @@ olive_df[, features] <- olive_df[, features]/100
 Some observations do not add up to 100%
 
 ```{r}
-hist(rowSums(olive_df[, features]), main = "Histogram of Total of Fatty Acid Content", xlab = "Total (%)")
+hist(
+  rowSums(olive_df[, features]), 
+  main = "Histogram of Total of Fatty Acid Content", 
+  xlab = "Total (%)")
 ```
 
 Adjust fatty acid content to add to 100% for all samples
@@ -95,26 +123,16 @@ for (i in 1:nrow(olive_df_adjusted)) {
   
 }
 
-# # Check adjustment was successful
-# rowSums(olive_df_adjusted[,features])
-# hist(rowSums(olive_df_adjusted[, features]), main = "Histogram of Total of Fatty Acid Content", xlab = "Total (%)")
 ```
 
 # Exploratory Data Analysis
 
 ```{r}
-# Hmisc::describe(olive_df_adjusted)
-
 means_area <- olive_df_adjusted %>% 
   dplyr::group_by(Area) %>% 
   gather(key = "fatty_acid", value = "percentage", -Region, -Area) %>% 
   dplyr::group_by(Region, Area, fatty_acid) %>% 
-  dplyr::summarise(Mean = mean(percentage, na.rm = TRUE)
-                   # Std_dev = sd(percentage, na.rm = TRUE),
-                   # Min = min(percentage, na.rm = TRUE),
-                   # Max = max(percentage, na.rm = TRUE),
-                   # Count = n()
-  ) %>% 
+  dplyr::summarise(Mean = mean(percentage, na.rm = TRUE), .groups = "keep") %>% 
   spread(key = fatty_acid, value = Mean)
 
 # Print table of mean values
@@ -125,25 +143,39 @@ std_dev_fatty_acid <- apply(means_area[,features], MARGIN = 2, sd)
   
 means_area_scaled <- means_area
 
-means_area_scaled[, features] <- scale(means_area_scaled[, features], center = means_fatty_acid, scale = std_dev_fatty_acid)
+means_area_scaled[, features] <-
+  scale(means_area_scaled[, features], 
+        center = means_fatty_acid, 
+        scale = std_dev_fatty_acid)
 
-# # Check scaling output
-# apply(means_area_scaled[, features], MARGIN = 2, sd)
-# apply(means_area_scaled[, features], MARGIN = 2, mean) %>% round(8)
-
-means_area_scaled %>% 
+(g <- means_area_scaled %>% 
   gather(key = "fatty_acid", value = "percentage", -Area, -Region) %>% 
   dplyr::arrange(Region, Area) %>% 
   ggplot(aes(x=fatty_acid,  y=Area, fill=percentage)) +
     geom_tile() +
-    labs(title = "Z-scores of mean fatty acid composition of olive samples by area", x = "Fatty Acid", y = "Area", fill = "z-score") +
+    labs(title = "Z-scores of mean fatty acid composition of olive samples by area",
+         x = "Fatty Acid",
+         y = "Area",
+         fill = "z-score") +
     scale_fill_viridis_c() +
-    theme_bw()
-  
+    theme_bw())
+```
+
+
+```{r, include=FALSE}
+g %>% ggsave(
+  filename = "www/heatmap_zscore_fa_composition.png",
+  device = "png",
+  limitsize = FALSE,
+  dpi = "retina",
+  width = 24,
+  height = 16,
+  units = "cm"
+)
 ```
 
 ```{r fig.width=12, fig.height=6}
-olive_df_adjusted %>% 
+(g <- olive_df_adjusted %>% 
   dplyr::select(-Area) %>% 
   gather(key = "Fatty Acid", value = "Percentage", -Region) %>% 
   ggplot(mapping = aes(x = Percentage, fill = `Fatty Acid`)) +
@@ -151,11 +183,25 @@ olive_df_adjusted %>%
     facet_grid(Region~`Fatty Acid`, scales = "free_x") +
     scale_fill_brewer(palette = "Set1") +
     labs(title = "Distribution of fatty acids for each region",
-         # subtitle = "Source: AFSIS",
          y = "Count",
          x = "%") +
-    theme_bw() + theme(legend.position = "none")
+    theme_bw() + theme(legend.position = "none"))
 ```
+
+
+```{r, include=FALSE}
+g %>% ggsave(
+  filename = "www/hist_fa_composition.png",
+  device = "png",
+  limitsize = FALSE,
+  dpi = "retina",
+  width = 30,
+  height = 14,
+  units = "cm"
+)
+```
+
+***
 
 # Clustering
 
@@ -169,17 +215,20 @@ Each k value is tested with 20 random starts. The Hartigan-Wong algorithm ([Hart
 olive_df_scaled <- olive_df_adjusted
 olive_df_scaled[, features] <- scale(olive_df_scaled[, features], center = TRUE, scale = TRUE)
 
-# # Check scaling was successfull
-# apply(olive_df_scaled[, features], MARGIN = 2, mean) %>% round(8)
-# apply(olive_df_scaled[, features], MARGIN = 2, sd)
-
 wss <- NULL # vector for within sum of squares
 bss <- NULL # vector for between sum of squares
 set.seed(1) # set seed for reproducibility
 
 for (i in 1:20) {
   
-  kmeans_output <- kmeans(x = olive_df_scaled[, features], centers = i, nstart = 20, iter.max = 30, algorithm = "Hartigan-Wong")
+  kmeans_output <-
+    kmeans(
+      x = olive_df_scaled[, features],
+      centers = i,
+      nstart = 20,
+      iter.max = 30,
+      algorithm = "Hartigan-Wong"
+    )
   wss[i] <- kmeans_output$tot.withinss
   bss[i] <- kmeans_output$betweenss
   
@@ -206,7 +255,14 @@ We will select a k of 5 for further k-means clustering on this dataset.
 
 ```{r}
 set.seed(1)
-kmeans_output <- kmeans(x = olive_df_scaled[, features], centers = 5, nstart = 20, iter.max = 30, algorithm = "Hartigan-Wong")
+kmeans_output <-
+  kmeans(
+    x = olive_df_scaled[, features],
+    centers = 5,
+    nstart = 20,
+    iter.max = 30,
+    algorithm = "Hartigan-Wong"
+  )
 
 olive_df_scaled$kmeans_clusters <- kmeans_output$cluster
 olive_df_adjusted$kmeans_clusters <- kmeans_output$cluster
@@ -224,7 +280,7 @@ confusion_matrix_region <- olive_df_scaled %>%
    dplyr::select(Region, Area, kmeans_clusters) %>% 
    dplyr::mutate(idx = 1) %>% 
    dplyr::group_by(Region, Area, kmeans_clusters) %>%
-   dplyr::summarise(Frequency = sum(idx)) %>% 
+   dplyr::summarise(Frequency = sum(idx), .groups = "keep") %>% 
    spread(key = "kmeans_clusters", value = "Frequency", fill = 0) %>% 
    dplyr::arrange(Region, Area)
 ```
@@ -233,28 +289,57 @@ confusion_matrix_region <- olive_df_scaled %>%
 ```{r}
 table(olive_df_scaled %>% dplyr::select(Region, kmeans_clusters)) %>% 
   data.frame() %>% 
-  ggplot(aes(x = kmeans_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
+  ggplot(aes(
+    x = kmeans_clusters,
+    y = fct_reorder(Region, desc(Region)),
+    fill = Freq,
+    label = Freq
+  )) + 
   geom_tile() +
   geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "K-means Clusters", y = "", title = "Confusion matrix of k-means clusters and region of olive oil samples") +
+  scale_fill_gradient(low = "#FFFFFF", high = "#132B43", guide="none") +
+  labs(
+    x = "K-means Clusters", 
+    y = "Area", 
+    title = "Confusion matrix of k-means clusters and region of olive oil samples") +
   theme_light()
 ```
 
 ```{r}
-confusion_matrix_region %>% 
-  # ungroup(Region) %>%
+(g <- confusion_matrix_region %>% 
   gather(key = "kmeans_clusters", value = "Frequency", -Area, -Region) %>% 
   dplyr::mutate(kmeans_clusters = as.numeric(kmeans_clusters)) %>% 
-  ggplot(aes(x = kmeans_clusters, y = fct_reorder(Area, dplyr::desc(Region)), fill = Frequency, label = Frequency)) + 
+   ggplot(aes(
+     x = kmeans_clusters,
+     y = fct_reorder(Area, dplyr::desc(Region)),
+     fill = Frequency,
+     label = Frequency
+   )) + 
   geom_tile() +
   geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "K-means Clusters", y = "", title = "Confusion matrix of k-means clusters and area of olive oil samples") +
-  theme_light()
+  scale_fill_gradient(low = "#FFFFFF", high = "#132B43", guide="none") +
+  labs(
+    x = "K-means Clusters", 
+    y = "Region", 
+    title = "Confusion matrix of k-means clusters and area of olive oil samples") +
+  theme_light())
 ```
 
 
+```{r, include=FALSE}
+g %>% ggsave(
+  filename = "www/conf_matrix_kmeans.png",
+  device = "png",
+  limitsize = FALSE,
+  dpi = "retina",
+  width = 20,
+  height = 14,
+  units = "cm"
+)
+```
+
+
+***
 
 ## Gaussian Mixture Models
 
@@ -267,7 +352,6 @@ It's important to highlight that GMMs assume multivariate normality of data.
 The `mclust` package will be used to apply GMM models to the data. The BIC is used to identify the optimize the covariance parameters and to identify the optimal number of clusters.
 
 ```{r}
-# install.packages("mclust")
 library(mclust)
 
 gmm <- mclust::Mclust(data = olive_df_adjusted[, features], G = 2:10, verbose = FALSE)
@@ -289,7 +373,10 @@ olive_df_adjusted <- cbind(olive_df_adjusted, gmm_probability)
 The optimal models uses the `r gmm$modelName` covariance parameters (diagonal, varying volume and shape).
 
 ```{r}
-gmm_BIC <- matrix(gmm$BIC, nrow = dim(gmm$BIC)[1], ncol = dim(gmm$BIC)[2]) %>% data.frame() %>% add_column(K = 2:10, .before=1)
+gmm_BIC <- matrix(gmm$BIC, nrow = dim(gmm$BIC)[1], ncol = dim(gmm$BIC)[2]) %>% 
+  data.frame() %>% 
+  add_column(K = 2:10, .before=1)
+
 colnames(gmm_BIC) <- c("K", colnames(gmm$BIC))
 
 gmm_BIC %>% 
@@ -315,7 +402,7 @@ olive_df_adjusted %>%
   gather(Cluster, probability, -ID, -Region, -Area) %>% 
   dplyr::arrange(Region, Area) %>% 
   ggplot(aes(x = probability, fill = Area)) +
-    geom_histogram() +
+    geom_histogram(bins=20) +
     facet_wrap(~ Cluster, nrow = 2) +
     labs(x = "Probability", y = "Count",
          title = "Distribution of probabilities for all observations aligning to each cluster") +
@@ -345,7 +432,7 @@ confusion_matrix_region <- olive_df_adjusted %>%
    dplyr::select(Region, Area, `GMM Clusters` =  gmm_clusters) %>% 
    dplyr::mutate(idx = 1) %>% 
    dplyr::group_by(Region, Area, `GMM Clusters`) %>%
-   dplyr::summarise(Frequency = sum(idx)) %>% 
+   dplyr::summarise(Frequency = sum(idx), .groups = "keep") %>% 
    spread(key = "GMM Clusters", value = "Frequency", fill = 0) %>% 
    dplyr::arrange(Region, Area)
 ```
@@ -356,37 +443,39 @@ table(olive_df_adjusted %>% dplyr::select(Region, gmm_clusters)) %>%
   ggplot(aes(x = gmm_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
   geom_tile() +
   geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand region of olive oil samples") +
+  scale_fill_gradient(low = "#FFFFFF", high = "#132B43", guide="none") +
+  labs(
+    x = "GMM Clusters", 
+    y = "Region", 
+    title = "Confusion matrix of Gaussian Mixture Model clusters\nand region of olive oil samples") +
   theme_light()
 ```
 
 ```{r}
-confusion_matrix_region %>% 
-  # ungroup(Region) %>%
+(g <- confusion_matrix_region %>% 
   gather(key = "GMM Clusters", value = "Frequency", -Area, -Region) %>% 
   dplyr::mutate(`GMM Clusters` = factor(`GMM Clusters`)) %>% 
   ggplot(aes(x = `GMM Clusters`, y = fct_reorder(Area, dplyr::desc(Region)), fill = Frequency, label = Frequency)) + 
   geom_tile() +
   geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand area of olive oil samples") +
-  theme_light()
+  scale_fill_gradient(low = "#FFFFFF", high = "#132B43", guide="none") +
+  labs(
+    x = "GMM Clusters", 
+    y = "Area", 
+    title = "Confusion matrix of Gaussian Mixture Model clusters\nand area of olive oil samples") +
+  theme_light())
 ```
+
+
+```{r, include=FALSE}
+g %>% ggsave(filename = "www/conf_matrix_gmm.png", device = "png", limitsize = FALSE, dpi = "retina", width = 20, height = 14, units = "cm")
+```
+
+***
 
 ## HDBSCAN
 
 ```{r}
-# olive_adjusted %>% 
-#   group_by(area) %>% 
-#   summarise(Count = n()) %>% 
-#   arrange(Count)
-```
-
-
-
-```{r}
-# install.packages("dbscan")
 library(dbscan)
 
 (hdbscan <- dbscan::hdbscan(olive_df_scaled[, features], minPts = 10))
@@ -410,24 +499,13 @@ olive_df_adjusted %>%
   # gather(Cluster, probability, -ID, -Region, -Area) %>% 
   dplyr::arrange(Region, Area) %>% 
   ggplot(aes(x = Probability, fill = Cluster)) +
-    geom_histogram() +
+    geom_histogram(bins=20) +
     facet_wrap(~ Cluster, nrow = 2, scales = "free_y") +
     labs(x = "Probability", y = "Count",
          title = "Distribution of probabilities for all observations aligning to each cluster") +
     scale_fill_brewer(type = "qual", palette = "Set1") +
     theme_light()
 ```
-
-The plot below shows that most samples with high uncertainty (>0.20) are from the South and are found mostly on cluster 3, 4 and 5.
-
-```{r}
-olive_df_adjusted %>% 
-  filter(hdbscan_clusters == 0) %>% 
-  pull(hdbscan_outlier_scores) %>% 
-  hist()
-
-```
-
 
 
 ```{r}
@@ -452,7 +530,7 @@ confusion_matrix_region <- olive_df_adjusted %>%
    dplyr::select(Region, Area, `HDBSCAN Clusters` =  hdbscan_clusters) %>% 
    dplyr::mutate(idx = 1) %>% 
    dplyr::group_by(Region, Area, `HDBSCAN Clusters`) %>%
-   dplyr::summarise(Frequency = sum(idx)) %>% 
+   dplyr::summarise(Frequency = sum(idx), .groups = "keep") %>% 
    spread(key = "HDBSCAN Clusters", value = "Frequency", fill = 0) %>% 
    dplyr::arrange(Region, Area)
 ```
@@ -463,53 +541,30 @@ table(olive_df_adjusted %>% dplyr::select(Region, hdbscan_clusters)) %>%
   ggplot(aes(x = hdbscan_clusters, y = fct_reorder(Region, desc(Region)), fill = Freq, label = Freq)) + 
   geom_tile() +
   geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand region of olive oil samples") +
+  scale_fill_gradient(low = "#FFFFFF", high = "#132B43", guide="none") +
+  labs(
+    x = "HDBSCAN Clusters", 
+    y = "Region", 
+    title = "Confusion matrix of HDBSCAN clusters\nand region of olive oil samples") +
   theme_light()
 ```
 
 ```{r}
-confusion_matrix_region %>% 
-  # ungroup(Region) %>%
-  gather(key = "GMM Clusters", value = "Frequency", -Area, -Region) %>% 
-  dplyr::mutate(`GMM Clusters` = factor(`GMM Clusters`)) %>% 
-  ggplot(aes(x = `GMM Clusters`, y = fct_reorder(Area, dplyr::desc(Region)), fill = Frequency, label = Frequency)) + 
+(g <- confusion_matrix_region %>% 
+  gather(key = "HDBSCAN Clusters", value = "Frequency", -Area, -Region) %>% 
+  dplyr::mutate(`HDBSCAN Clusters` = factor(`HDBSCAN Clusters`)) %>% 
+  ggplot(aes(x = `HDBSCAN Clusters`, y = fct_reorder(Area, dplyr::desc(Region)), fill = Frequency, label = Frequency)) + 
   geom_tile() +
   geom_text() +
-  scale_fill_gradient(low = "#f0f0f0", high = "#525252", guide = "none") +
-  labs(x = "GMM Clusters", y = "", title = "Confusion matrix of Gaussian Mixture Model clusters\nand area of olive oil samples") +
-  theme_light()
+  scale_fill_gradient(low = "#FFFFFF", high = "#132B43", guide="none") +
+  labs(
+    x = "HDBSCAN Clusters", 
+    y = "Region", 
+    title = "Confusion matrix of HDBSCAN clusters\nand area of olive oil samples") +
+  theme_light())
 ```
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+```{r, include=FALSE}
+g %>% ggsave(filename = "www/conf_matrix_hdbscan.png", device = "png", limitsize = FALSE, dpi = "retina", width = 20, height = 14, units = "cm")
+```
